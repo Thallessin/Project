@@ -15,13 +15,24 @@ def get_db_connection():
     )
     return db
 
-
+# Inicializar o banco de dados
 db = get_db_connection()
 cursor = db.cursor()
+
+# Criar tabelas
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS cursos (
     id INT AUTO_INCREMENT PRIMARY KEY,
     nome VARCHAR(100) NOT NULL
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS turmas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    curso_id INT,
+    FOREIGN KEY (curso_id) REFERENCES cursos(id)
 )
 """)
 
@@ -33,12 +44,14 @@ CREATE TABLE IF NOT EXISTS usuarios (
     telefone VARCHAR(20),
     cpf VARCHAR(14),
     curso_id INT,
-    FOREIGN KEY (curso_id) REFERENCES cursos(id)
+    turma_id INT,
+    FOREIGN KEY (curso_id) REFERENCES cursos(id),
+    FOREIGN KEY (turma_id) REFERENCES turmas(id)
 )
 """)
 db.commit()
 
-# Rota para a página inicial
+# Página inicial - Cadastro de Alunos
 @app.route('/')
 def index():
     conn = get_db_connection()
@@ -48,7 +61,7 @@ def index():
     conn.close()
     return render_template('frontend.html', cursos=cursos)
 
-# Rota para listar cursos
+# API para listar cursos
 @app.route('/cursos', methods=['GET'])
 def get_cursos():
     conn = get_db_connection()
@@ -59,18 +72,65 @@ def get_cursos():
     conn.close()
     return jsonify(cursos_list)
 
-# Rota para listar usuários
+# Página para listar todas as turmas
 @app.route('/usuarios', methods=['GET'])
-def get_users():
+def listar_turmas():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT u.id, u.nome, u.email, u.telefone, u.cpf, c.nome AS curso FROM usuarios u LEFT JOIN cursos c ON u.curso_id = c.id")
-    users = cursor.fetchall()
-    users_list = [{"id": u[0], "nome": u[1], "email": u[2], "telefone": u[3], "cpf": u[4], "curso": u[5]} for u in users]
+    cursor.execute("SELECT id, nome FROM turmas")
+    turmas = cursor.fetchall()
+    turmas_list = [{"id": t[0], "nome": t[1]} for t in turmas]
     conn.close()
-    return render_template('banco.html', users=users_list)
+    return render_template('banco.html', turmas=turmas_list)
 
-# Rota para adicionar um usuário
+# Página para listar alunos de uma turma
+@app.route('/turma/<int:turma_id>', methods=['GET'])
+def listar_alunos_da_turma(turma_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT u.id, u.nome, u.email, u.telefone, u.cpf
+        FROM usuarios u
+        WHERE u.turma_id = %s
+    """, (turma_id,))
+    alunos = cursor.fetchall()
+
+    cursor.execute("SELECT nome FROM turmas WHERE id = %s", (turma_id,))
+    turma_nome = cursor.fetchone()
+    turma_nome = turma_nome[0] if turma_nome else "Turma Não Encontrada"
+
+    alunos_list = [{"id": a[0], "nome": a[1], "email": a[2], "telefone": a[3], "cpf": a[4]} for a in alunos]
+    conn.close()
+    return render_template('turma.html', alunos=alunos_list, turma_nome=turma_nome)
+
+# Função para encontrar ou criar turma baseado no curso
+def encontrar_ou_criar_turma(curso_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT nome FROM cursos WHERE id = %s", (curso_id,))
+    curso_nome = cursor.fetchone()
+    if not curso_nome:
+        conn.close()
+        raise ValueError("Curso não encontrado")
+
+    nome_turma = f"Turma {curso_nome[0]}"
+
+    cursor.execute("SELECT id FROM turmas WHERE nome = %s AND curso_id = %s", (nome_turma, curso_id))
+    turma = cursor.fetchone()
+
+    if turma:
+        turma_id = turma[0]
+    else:
+        cursor.execute("INSERT INTO turmas (nome, curso_id) VALUES (%s, %s)", (nome_turma, curso_id))
+        conn.commit()
+        turma_id = cursor.lastrowid
+
+    cursor.close()
+    conn.close()
+    return turma_id
+
+# API para adicionar aluno
 @app.route('/add_user', methods=['POST'])
 def add_user():
     data = request.json
@@ -78,18 +138,22 @@ def add_user():
         return jsonify({"error": "Todos os campos são obrigatórios"}), 400
 
     try:
+        turma_id = encontrar_ou_criar_turma(data['curso_id'])
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO usuarios (nome, email, telefone, cpf, curso_id) VALUES (%s, %s, %s, %s, %s)",
-                       (data['nome'], data['email'], data['telefone'], data['cpf'], data['curso_id']))
+        cursor.execute("""
+            INSERT INTO usuarios (nome, email, telefone, cpf, curso_id, turma_id) 
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (data['nome'], data['email'], data['telefone'], data['cpf'], data['curso_id'], turma_id))
         conn.commit()
         cursor.close()
         conn.close()
         return jsonify({"message": "Usuário adicionado com sucesso!"}), 201
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-    
-# Rota para remover um usuário
+
+# API para remover aluno
 @app.route('/remover/<int:id>', methods=['POST'])
 def remove_user(id):
     try:
@@ -103,6 +167,6 @@ def remove_user(id):
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
-# Iniciar o servidor
+# Rodar servidor
 if __name__ == '__main__':
     app.run(debug=True)
