@@ -166,6 +166,50 @@ def remove_user(id):
         return redirect('/usuarios')
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+    
+# Página para cadastrar professores
+@app.route('/professores', methods=['GET'])
+def listar_professores():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT p.id, p.nome, p.email, p.formacao, c.nome
+        FROM professores p
+        LEFT JOIN cursos c ON p.curso_id = c.id
+    """)
+    professores = cursor.fetchall()
+
+    cursor.execute("SELECT * FROM cursos")
+    cursos = cursor.fetchall()
+
+    conn.close()
+    return render_template("professores.html", professores=professores, cursos=cursos)
+
+# API para adicionar professor (sem disciplina)
+@app.route('/add_professor', methods=['POST'])
+def add_professor():
+    data = request.json
+    required_fields = ("nome", "email", "formacao", "curso_id")
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Inserir professor diretamente com curso
+        cursor.execute("""
+            INSERT INTO professores (nome, email, formacao, curso_id) 
+            VALUES (%s, %s, %s, %s)
+        """, (data["nome"], data["email"], data["formacao"], data["curso_id"]))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": "Professor cadastrado com sucesso!"}), 201
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 # Rodar servidor
 if __name__ == '__main__':
